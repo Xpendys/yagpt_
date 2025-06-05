@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Profile</title>
+</head>
+<body>
+    <h2>Profile</h2>
+    <p>Logged in as {{ user.username }}</p>
+    <form method="post" action="/profile">
+        <label>Telegram Bot Token:<br>
+            <input type="text" name="tg_bot_token" value="{{ user.tg_bot_token or '' }}">
+        </label><br>
+        <label>System Prompt:<br>
+            <textarea name="system_prompt" rows="4" cols="50">{{ user.system_prompt or '' }}</textarea>
+        </label><br>
+        <button type="submit">Save</button>
+    </form>
+</body>
+</html>
