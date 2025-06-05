@@ -1,6 +1,8 @@
 import logging
 import requests
-from telegram.ext import Updater, MessageHandler, Filters
+from telegram import Update
+from telegram.ext import (ApplicationBuilder, MessageHandler,
+                          ContextTypes, filters)
 from backend.config import TELEGRAM_BOT_TOKEN
 
 logging.basicConfig(level=logging.INFO)
@@ -21,17 +23,23 @@ def ask_backend(prompt):
         logger.error(f"Ошибка при обращении к backend: {e}")
         return "Произошла ошибка при обращении к серверу."
 
-def handle_message(update, context):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
     user_message = update.message.text
     response = ask_backend(user_message)
-    update.message.reply_text(response)
+    await update.message.reply_text(response)
 
-def run_bot():
-    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    updater.start_polling()
-    updater.idle()
+async def run_bot():
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+    await application.run_polling()
+
+def main():
+    import asyncio
+    asyncio.run(run_bot())
 
 if __name__ == "__main__":
-    run_bot()
+    main()
