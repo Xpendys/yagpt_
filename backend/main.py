@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Body
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Body, Form, Request, Cookie
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 import os, shutil
 import threading
@@ -22,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 init_db()
+templates = Jinja2Templates(directory="frontend/templates")
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,6 +63,21 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
     return user
 
+def get_user_from_token(token: str, db: Session):
+    from jose import jwt, JWTError
+    from backend.auth import SECRET_KEY, ALGORITHM
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            return None
+    except JWTError:
+        return None
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or not user.is_active:
+        return None
+    return user
+
 class UserCreate(BaseModel):
     username: str
     password: str
@@ -73,6 +91,36 @@ class UserProfile(BaseModel):
 class AskRequest(BaseModel):
     prompt: str
     user_id: Optional[int] = None
+
+@app.get("/register", response_class=HTMLResponse)
+def register_form(request: Request):
+    return templates.TemplateResponse("register.html", {"request": request})
+
+@app.post("/register")
+def register_user(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    user_obj = User(username=username, password_hash=get_password_hash(password))
+    db.add(user_obj)
+    db.commit()
+    return RedirectResponse("/login", status_code=303)
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.post("/login")
+def login_web(response: Response, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == username).first()
+    if not user or not verify_password(password, user.password_hash):
+        return templates.TemplateResponse("login.html", {"request": Request({}), "error": "Invalid credentials"})
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="User is disabled")
+    token = create_access_token(data={"sub": user.username})
+    resp = RedirectResponse(url="/profile", status_code=303)
+    resp.set_cookie("token", token)
+    return resp
 
 @app.post("/token")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -131,6 +179,29 @@ def update_profile(profile: UserProfile, current_user: User = Depends(get_curren
         current_user.system_prompt = profile.system_prompt
     db.commit()
     return {"msg": "Profile updated"}
+
+@app.get("/profile", response_class=HTMLResponse)
+def profile_page(request: Request, token: Optional[str] = Cookie(None), db: Session = Depends(get_db)):
+    if not token:
+        return RedirectResponse("/login")
+    user = get_user_from_token(token, db)
+    if not user:
+        return RedirectResponse("/login")
+    return templates.TemplateResponse("profile.html", {"request": request, "user": user})
+
+@app.post("/profile")
+def profile_update(token: Optional[str] = Cookie(None), tg_bot_token: str = Form(None), system_prompt: str = Form(None), db: Session = Depends(get_db)):
+    if not token:
+        return RedirectResponse("/login")
+    user = get_user_from_token(token, db)
+    if not user:
+        return RedirectResponse("/login")
+    if tg_bot_token is not None:
+        user.tg_bot_token = tg_bot_token
+    if system_prompt is not None:
+        user.system_prompt = system_prompt
+    db.commit()
+    return RedirectResponse("/profile", status_code=303)
 
 @app.post("/upload_file/")
 def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
